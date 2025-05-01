@@ -40,6 +40,51 @@ class Matrix{
       return b;
     }
 };
+
+class CSRMatrix {
+  public:
+      int nbrow, nbcol;
+      std::vector<double> values;
+      std::vector<int> col_indices;
+      std::vector<int> row_indices;
+  
+      // Constructor: Build a 1D Poisson matrix with Dirichlet BCs
+      CSRMatrix(int nrows, int ncols) : nbrow(nrows), nbcol(ncols) {
+          row_indices.resize(nbrow + 1);
+          for (int i = 0; i < nbrow; ++i) {
+              row_indices[i] = values.size();
+  
+              if (i > 0) {
+                  values.push_back(-1.0);
+                  col_indices.push_back(i - 1);
+              }
+  
+              values.push_back(2.0);
+              col_indices.push_back(i);
+  
+              if (i + 1 < nbcol) {
+                  values.push_back(-1.0);
+                  col_indices.push_back(i + 1);
+              }
+          }
+          row_indices[nbrow] = values.size();
+      }
+  
+      // Matrix-vector multiplication y = A * x
+      std::vector<double> operator*(const std::vector<double>& x) const {
+          assert(x.size() == nbcol);
+          std::vector<double> y(nbrow, 0.0);
+          for (int i = 0; i < nbrow; ++i) {
+              for (int j = row_indices[i]; j < row_indices[i + 1]; ++j) {
+                  y[i] += values[j] * x[col_indices[j]];
+              }
+          }
+          return y;
+      }
+  
+      int NbRow() const { return nbrow; }
+      int NbCol() const { return nbcol; }
+};
   
 // scalar product (u, v)
 double operator,(const std::vector<double>& u, const std::vector<double>& v){ 
@@ -88,6 +133,8 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
 }
 
 Matrix A;
+CSRMatrix CSR_A;
+
 
 /* N is the size of the matrix, and n is the number of rows assigned per rank.
  * It is your responsibility to generate the input matrix, assuming the ranks are 
@@ -100,6 +147,7 @@ Matrix A;
  */
 CG_Solver::CG_Solver(const int& n, const int& N) {
   A = Matrix(n, N);
+  CSR_A = CSRMatrix(n, N); 
 }
 
 /* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
@@ -118,6 +166,25 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
     int j = (it->first).first;
     int k = (it->first).second;
     coefficients.push_back(Eigen::Triplet<double>(j, k, it -> second)); 
+  }
+
+  std::vector<Eigen::Triplet<double>> CSR_coefficients;
+  for (int row = 0; row < A.NbRow(); ++row) {
+    for (int idx = A.row_indeces[row]; idx < A.row_indeces[row + 1]; ++idx) {
+        int col = A.col_indices[idx];
+        double val = A.values[idx];
+        CSR_coefficients.push_back(Eigen::Triplet<double>(row, col, val));
+    }
+  }
+
+  std::cout << "Triplets from A.data (original map-based):\n";
+  for (const auto& t : coefficients) {
+      std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
+  }
+
+  std::cout << "\nTriplets from CSR matrix:\n";
+  for (const auto& t : CSR_coefficients) {
+      std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
   }
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
