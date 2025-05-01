@@ -169,10 +169,10 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   }
 
   std::vector<Eigen::Triplet<double>> CSR_coefficients;
-  for (int row = 0; row < A.NbRow(); ++row) {
-    for (int idx = A.row_indeces[row]; idx < A.row_indeces[row + 1]; ++idx) {
-        int col = A.col_indices[idx];
-        double val = A.values[idx];
+  for (int row = 0; row < CSR_A.NbRow(); ++row) {
+    for (int idx = CSR_A.row_indices[row]; idx < CSR_A.row_indices[row + 1]; ++idx) {
+        int col = CSR_A.col_indices[idx];
+        double val = CSR_A.values[idx];
         CSR_coefficients.push_back(Eigen::Triplet<double>(row, col, val));
     }
   }
