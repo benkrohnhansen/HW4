@@ -123,7 +123,7 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
 
-  int n = A.NbCol();
+  int n = CSR_A.NbCol();
 
   // get the local diagonal block of A
   std::vector<Eigen::Triplet<double>> CSR_coefficients;
