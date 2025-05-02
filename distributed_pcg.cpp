@@ -49,7 +49,7 @@ class CSRMatrix {
       std::vector<int> row_indices;
   
       // Constructor: Build a 1D Poisson matrix with Dirichlet BCs
-      CSRMatrix(int nrows, int ncols) : nbrow(nrows), nbcol(ncols) {
+      CSRMatrix(const int& nrows=0, const int& ncols=0) : nbrow(nrows), nbcol(ncols) {
           row_indices.resize(nbrow + 1);
           for (int i = 0; i < nbrow; ++i) {
               row_indices[i] = values.size();
