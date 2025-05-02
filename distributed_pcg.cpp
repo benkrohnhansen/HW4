@@ -139,10 +139,10 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   // UNCOMMENT TO PRINT CHECK COEFFICIENTS
   // ==========================================
 
-  // std::cout << "\nTriplets from CSR matrix:\n";
-  // for (const auto& t : coefficients) {
-  //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-  // }
+  std::cout << "\nTriplets from CSR matrix:\n";
+  for (const auto& t : coefficients) {
+      std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
+  }
   
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
