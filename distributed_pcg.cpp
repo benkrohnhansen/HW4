@@ -8,39 +8,6 @@
 
 #include <Eigen/Sparse>
 
-class Matrix{
-  public:
-    typedef std::pair<int, int> N2;
-  
-    std::map<N2, double> data;
-    int nbrow;
-    int nbcol;
-
-    Matrix(const int& nr = 0, const int& nc = 0): nbrow(nr), nbcol(nc) {
-      for (int i = 0; i < nc; ++i) {
-        data[std::make_pair(i, i)] = 3.0;
-        if (i - 1 >= 0) data[std::make_pair(i, i - 1)] = -1.0;
-        if (i + 1 < nc) data[std::make_pair(i, i + 1)] = -1.0;
-      }
-    }; 
-  
-    int NbRow() const {return nbrow;}
-    int NbCol() const {return nbcol;}
-  
-    // matrix-vector product with vector xi
-    std::vector<double> operator*(const std::vector<double>& xi) const {
-      std::vector<double> b(NbRow(), 0.);
-      for(auto it = data.begin(); it != data.end(); ++it){
-        int j = (it->first).first;
-        int k = (it->first).second; 
-        double Mjk = it->second;
-        b[j] += Mjk * xi[k];
-      }
-  
-      return b;
-    }
-};
-
 class CSRMatrix {
   public:
       int nbrow, nbcol;
@@ -132,7 +99,6 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
   return x;
 }
 
-Matrix A;
 CSRMatrix CSR_A;
 
 
@@ -146,7 +112,6 @@ CSRMatrix CSR_A;
  * Note that the starter code only works for 1 rank and it is not efficient.
  */
 CG_Solver::CG_Solver(const int& n, const int& N) {
-  A = Matrix(n, N);
   CSR_A = CSRMatrix(n, N); 
 }
 
@@ -161,13 +126,6 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int n = A.NbCol();
 
   // get the local diagonal block of A
-  std::vector<Eigen::Triplet<double>> coefficients;
-  for(auto it = A.data.begin(); it != A.data.end(); ++it){
-    int j = (it->first).first;
-    int k = (it->first).second;
-    coefficients.push_back(Eigen::Triplet<double>(j, k, it -> second)); 
-  }
-
   std::vector<Eigen::Triplet<double>> CSR_coefficients;
   for (int row = 0; row < CSR_A.NbRow(); ++row) {
     for (int idx = CSR_A.row_indices[row]; idx < CSR_A.row_indices[row + 1]; ++idx) {
@@ -177,19 +135,19 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
     }
   }
 
-  std::cout << "Triplets from A.data (original map-based):\n";
-  for (const auto& t : coefficients) {
-      std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-  }
+  // ==========================================
+  // UNCOMMENT TO PRINT CHECK COEFFICIENTS
+  // ==========================================
 
-  std::cout << "\nTriplets from CSR matrix:\n";
-  for (const auto& t : CSR_coefficients) {
-      std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-  }
+  // std::cout << "\nTriplets from CSR matrix:\n";
+  // for (const auto& t : CSR_coefficients) {
+  //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
+  // }
+  
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
   Eigen::SparseMatrix<double> B(n, n);
-  B.setFromTriplets(coefficients.begin(), coefficients.end());
+  B.setFromTriplets(CSR_coefficients.begin(), CSR_coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
   const double epsilon = tol * std::sqrt((b, b));
