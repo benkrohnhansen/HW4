@@ -120,6 +120,11 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
     coefficients.push_back(Eigen::Triplet<double>(j, k, it -> second)); 
   }
 
+  std::cout << "\nTriplets from CSR matrix:\n";
+  for (const auto& t : coefficients) {
+      std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
+  }
+
   // compute the Cholesky factorization of the diagonal block for the preconditioner
   Eigen::SparseMatrix<double> B(n, n);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
@@ -132,6 +137,17 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   double res = std::sqrt((r, r));
 
   int num_it = 0;
+
+  if (rank == 0) {
+    std::vector<double> Ap = A * p;
+    std::cout << "A * p = [";
+    for (size_t i = 0; i < Ap.size(); ++i) {
+        std::cout << Ap[i];
+        if (i < Ap.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]\n";
+  }
+
   
   while(res >= epsilon) {
     alpha = (r, z) / (p, A * p);
