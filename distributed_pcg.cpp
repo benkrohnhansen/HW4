@@ -99,7 +99,7 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
   return x;
 }
 
-CSRMatrix CSR_A;
+CSRMatrix A;
 
 
 /* N is the size of the matrix, and n is the number of rows assigned per rank.
@@ -112,7 +112,7 @@ CSRMatrix CSR_A;
  * Note that the starter code only works for 1 rank and it is not efficient.
  */
 CG_Solver::CG_Solver(const int& n, const int& N) {
-  CSR_A = CSRMatrix(n, N); 
+  A = CSRMatrix(n, N); 
 }
 
 /* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
@@ -123,15 +123,15 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
 
-  int n = CSR_A.NbCol();
+  int n = A.NbCol();
 
   // get the local diagonal block of A
-  std::vector<Eigen::Triplet<double>> CSR_coefficients;
-  for (int row = 0; row < CSR_A.NbRow(); ++row) {
-    for (int idx = CSR_A.row_indices[row]; idx < CSR_A.row_indices[row + 1]; ++idx) {
-        int col = CSR_A.col_indices[idx];
-        double val = CSR_A.values[idx];
-        CSR_coefficients.push_back(Eigen::Triplet<double>(row, col, val));
+  std::vector<Eigen::Triplet<double>> coefficients;
+  for (int row = 0; row < A.NbRow(); ++row) {
+    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
+        int col = A.col_indices[idx];
+        double val = A.values[idx];
+        coefficients.push_back(Eigen::Triplet<double>(row, col, val));
     }
   }
 
@@ -140,14 +140,14 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   // ==========================================
 
   // std::cout << "\nTriplets from CSR matrix:\n";
-  // for (const auto& t : CSR_coefficients) {
+  // for (const auto& t : coefficients) {
   //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
   // }
   
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
   Eigen::SparseMatrix<double> B(n, n);
-  B.setFromTriplets(CSR_coefficients.begin(), CSR_coefficients.end());
+  B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
   const double epsilon = tol * std::sqrt((b, b));
