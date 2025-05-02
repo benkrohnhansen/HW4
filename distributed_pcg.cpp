@@ -138,15 +138,13 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
 
   int num_it = 0;
 
-  if (rank == 0) {
-    std::vector<double> Ap = A * p;
-    std::cout << "A * p = [";
-    for (size_t i = 0; i < Ap.size(); ++i) {
-        std::cout << Ap[i];
-        if (i < Ap.size() - 1) std::cout << ", ";
-    }
-    std::cout << "]\n";
+  std::vector<double> Ap = A * p;
+  std::cout << "A * p = [";
+  for (size_t i = 0; i < Ap.size(); ++i) {
+      std::cout << Ap[i];
+      if (i < Ap.size() - 1) std::cout << ", ";
   }
+  std::cout << "]\n";
 
   
   while(res >= epsilon) {
