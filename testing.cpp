@@ -209,7 +209,7 @@ void CG_Solver::solve(const std::vector<double>& b,
   const double epsilon = tol * norm_b;
   std::vector<double> r = b, z = prec(P, b), p = z;
   double rz = global_dot(r, z);
-
+    int num_it = 0;
   // Main PCG loop
   while (true) {
     // 1) gather the full 'p' into p_global
@@ -237,6 +237,11 @@ void CG_Solver::solve(const std::vector<double>& b,
 
     // 6) compute new (r,z), check convergence
     double rz_new = global_dot(r, z);
+      if (rank == 0) {
+        double res_norm = std::sqrt(rz_new);
+        std::cout << "iteration: " << num_it
+                << "\tresidual:  " << res_norm << "\n";
+        }
     if (std::sqrt(rz_new) < epsilon) break;
 
     // 7) update p and rz for next iteration
