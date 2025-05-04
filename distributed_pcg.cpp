@@ -9,48 +9,69 @@
 #include <Eigen/Sparse>
 
 class CSRMatrix {
-  public:
-      int nbrow, nbcol;
-      std::vector<double> values;
-      std::vector<int> col_indices;
-      std::vector<int> row_indices;
-  
-      // Constructor: Build a 1D Poisson matrix with Dirichlet BCs
-      CSRMatrix(const int& nrows=0, const int& ncols=0) : nbrow(nrows), nbcol(ncols) {
-          row_indices.resize(nbrow + 1);
-          for (int i = 0; i < nbrow; ++i) {
-              row_indices[i] = values.size();
-  
-              if (i > 0) {
-                  values.push_back(-1.0);
-                  col_indices.push_back(i - 1);
-              }
-  
-              values.push_back(2.0);
-              col_indices.push_back(i);
-  
-              if (i + 1 < nbcol) {
-                  values.push_back(-1.0);
-                  col_indices.push_back(i + 1);
-              }
+public:
+    int nbrow, nbcol;
+    std::vector<double> values;
+    std::vector<int>    col_indices;
+    std::vector<int>    row_indices;
+
+    // 1) Full-matrix constructor (optional; you can keep or remove this)
+    CSRMatrix(const int& nrows=0, const int& ncols=0)
+      : nbrow(nrows), nbcol(ncols)
+    {
+        row_indices.resize(nbrow + 1);
+        for(int i=0; i<nbrow; ++i) {
+            row_indices[i] = values.size();
+            if(i > 0) {
+                values.push_back(-1.0);
+                col_indices.push_back(i-1);
+            }
+            values.push_back(2.0);
+            col_indices.push_back(i);
+            if(i+1 < nbcol) {
+                values.push_back(-1.0);
+                col_indices.push_back(i+1);
+            }
+        }
+        row_indices[nbrow] = values.size();
+    }
+
+    // 2) Slice constructor: only build rows [row_start … row_start+nbrow-1]
+    CSRMatrix(const int& nrows, const int& ncols, const int& row_start)
+      : nbrow(nrows), nbcol(ncols)
+    {
+        row_indices.resize(nbrow + 1);
+        for(int i_local = 0; i_local < nbrow; ++i_local) {
+            int ig = row_start + i_local;            // global row index
+            row_indices[i_local] = values.size();
+          if (ig > 0) {
+              values.push_back(-1.0);
+              col_indices.push_back((ig - 1) - row_start);
           }
-          row_indices[nbrow] = values.size();
-      }
-  
-      // Matrix-vector multiplication y = A * x
-      std::vector<double> operator*(const std::vector<double>& x) const {
-          assert(x.size() == nbcol);
-          std::vector<double> y(nbrow, 0.0);
-          for (int i = 0; i < nbrow; ++i) {
-              for (int j = row_indices[i]; j < row_indices[i + 1]; ++j) {
-                  y[i] += values[j] * x[col_indices[j]];
-              }
+          values.push_back(2.0);
+          col_indices.push_back(ig - row_start);
+          if (ig + 1 < nbcol) {
+              values.push_back(-1.0);
+              col_indices.push_back((ig + 1) - row_start);
           }
-          return y;
-      }
-  
-      int NbRow() const { return nbrow; }
-      int NbCol() const { return nbcol; }
+        }
+        row_indices[nbrow] = values.size();
+    }
+
+    // Matrix–vector multiply (local rows only)
+    std::vector<double> operator*(const std::vector<double>& x) const {
+        assert(x.size() == (size_t)nbcol);
+        std::vector<double> y(nbrow, 0.0);
+        for(int i=0; i<nbrow; ++i) {
+            for(int k = row_indices[i]; k < row_indices[i+1]; ++k) {
+                y[i] += values[k] * x[col_indices[k]];
+            }
+        }
+        return y;
+    }
+
+    int NbRow() const { return nbrow; }
+    int NbCol() const { return nbcol; }
 };
   
 // scalar product (u, v)
@@ -127,8 +148,7 @@ CG_Solver::CG_Solver(const int& n, const int& N) {
   std::cout << "Rank" << rank << " owns rows " << row_start << "-" << row_end << "\n";
 
   // 4) Pass those into the CSR  builder so it  only builds that  slice
-  CSRMatrix fullA(N, N);
-  A = fullA.submatrix(row_start, n_local);
+  A = CSRMatrix(n_local, N, row_start);
 }
 
 /* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
@@ -139,7 +159,7 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
 
-  int n = A.NbCol();
+  int n_local = A.NbRow(); 
 
   // get the local diagonal block of A
   std::vector<Eigen::Triplet<double>> coefficients;
@@ -162,7 +182,7 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
-  Eigen::SparseMatrix<double> B(n, n);
+  Eigen::SparseMatrix<double> B(n_local, n_local);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
