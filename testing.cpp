@@ -16,55 +16,33 @@ public:
     std::vector<int>    row_indices;
 
     // 1) Full-matrix constructor (optional; you can keep or remove this)
-    CSRMatrix(const int& nrows=0, const int& ncols=0)
-      : nbrow(nrows), nbcol(ncols)
-    {
-        row_indices.resize(nbrow + 1);
-        for(int i=0; i<nbrow; ++i) {
-            row_indices[i] = values.size();
-            if(i > 0) {
-                values.push_back(-1.0);
-                col_indices.push_back(i-1);
-            }
-            values.push_back(2.0);
-            col_indices.push_back(i);
-            if(i+1 < nbcol) {
-                values.push_back(-1.0);
-                col_indices.push_back(i+1);
-            }
-        }
-        row_indices[nbrow] = values.size();
-    }
-
-    // 2) Slice constructor: only build rows [row_start … row_start+nbrow-1]
     CSRMatrix(const int& nrows, const int& ncols, const int& row_start)
       : nbrow(nrows), nbcol(ncols)
     {
       row_indices.resize(nbrow + 1);
-      for(int i_local = 0; i_local < nbrow; ++i_local) {
-        int ig = row_start + i_local;           // global row
-    
+      for (int i_local = 0; i_local < nbrow; ++i_local) {
+        int ig = row_start + i_local;           // global row index
         row_indices[i_local] = values.size();
     
-        // sub-diagonal *inside* local block?
-        if (i_local > 0) {
+        // global sub‐diagonal?
+        if (ig > 0) {
           values.push_back(-1.0);
-          col_indices.push_back(ig - 1);        // global col index
+          col_indices.push_back(ig - 1);
         }
     
         // diagonal
         values.push_back(2.0);
         col_indices.push_back(ig);
     
-        // super-diagonal *inside* local block?
-        if (i_local + 1 < nbrow) {
+        // global super‐diagonal?
+        if (ig + 1 < nbcol) {
           values.push_back(-1.0);
           col_indices.push_back(ig + 1);
         }
       }
       row_indices[nbrow] = values.size();
     }
-    // Matrix–vector multiply (local rows only)
+        // Matrix–vector multiply (local rows only)
     std::vector<double> operator*(const std::vector<double>& x) const {
         assert(x.size() == (size_t)nbcol);
         std::vector<double> y(nbrow, 0.0);
