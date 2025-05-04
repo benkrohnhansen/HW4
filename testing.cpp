@@ -204,53 +204,51 @@ void CG_Solver::solve(const std::vector<double>& b,
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
   // Initial norms and vectors
-  double norm_b    = std::sqrt(global_dot(b, b));
-  const double eps = tol * norm_b;
-  std::vector<double> r = b;
-  std::vector<double> z = prec(P, b);
-  std::vector<double> p = z;
-  double rz = global_dot(r, z);
+  double norm_b    = std::sqrt(global_dot(b, b)); 
+const double eps = tol * norm_b;
+std::vector<double> r = b, z = prec(P, b), p = z;
+double rz = global_dot(r, z);
+int num_it = 0;
 
-  int num_it = 0;
-  // Main PCG loop 
-  while (true) {
-    // 1) Gather the full search direction p into p_global
-    MPI_Allgather(
-      p.data(),       n_local, MPI_DOUBLE,
-      p_global.data(),n_local, MPI_DOUBLE,
-      MPI_COMM_WORLD
-    );
+// Main PCG loop
+while (true) {
+  // 1) Gather global search direction
+  MPI_Allgather(
+    p.data(),        n_local, MPI_DOUBLE,
+    p_global.data(), n_local, MPI_DOUBLE,
+    MPI_COMM_WORLD
+  );
 
-    // 2) Local mat–vec using CSR: Ap_local = A * p_global
-    Ap_local = A * p_global;
+  // 2) Local mat–vec: Ap_local = A * p_global
+  Ap_local = A * p_global;
 
-    // 3) Compute alpha = (r,z) / (p,Ap)
-    double pAp   = global_dot(p, Ap_local);
-    double alpha = rz / pAp;
+  // 3) Compute alpha = (r,z) / (p,Ap)
+  double pAp   = global_dot(p, Ap_local);
+  double alpha = rz / pAp;
 
-    // 4) Update x and r (local slices)
-    for (int i = 0; i < n_local; ++i) {
-      x[i] += alpha * p[i];
-      r[i] -= alpha * Ap_local[i];
-    }
-
-    // 5) Apply preconditioner: z = P^{-1} r
-    z = prec(P, r);
-
-    // 6) Compute new (r,z), print, and check convergence
-    double rz_new = global_dot(r, z);
-    num_it++;
-    if (rank == 0) {
-      double res_norm = std::sqrt(global_dot(r, r));
-      std::cout << "iteration: " << num_it
-                << "\tresidual:  " << res_norm << "\n";
-    }
-    if (std::sqrt(rz_new) < eps) break;
-
-    // 7) Update search direction p and rz for next iter
-    double beta = rz_new / rz;
-    for (int i = 0; i < n_local; ++i)
-      p[i] = z[i] + beta * p[i];
-    rz = rz_new;
+  // 4) Update x and r locally
+  for (int i = 0; i < n_local; ++i) {
+    x[i] += alpha * p[i];
+    r[i] -= alpha * Ap_local[i];
   }
+
+  // 5) Apply preconditioner locally
+  z = prec(P, r);
+
+  // 6) Compute new (r,z), print, and test convergence
+  double rz_new = global_dot(r, z);
+  num_it++;
+  if (rank == 0) {
+    double res_norm = std::sqrt(global_dot(r, r));
+    std::cout << "iteration: " << num_it
+              << "\tresidual:  " << res_norm << "\n";
+  }
+  if (std::sqrt(rz_new) < eps)
+    break;
+
+  // 7) Update search direction and rz for next iteration
+  double beta = rz_new / rz;
+  for (int i = 0; i < n_local; ++i)
+    p[i] = z[i] + beta * p[i];
+  rz = rz_new;
 }
