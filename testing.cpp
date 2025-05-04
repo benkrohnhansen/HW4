@@ -40,22 +40,29 @@ public:
     CSRMatrix(const int& nrows, const int& ncols, const int& row_start)
       : nbrow(nrows), nbcol(ncols)
     {
-        row_indices.resize(nbrow + 1);
-        for(int i_local = 0; i_local < nbrow; ++i_local) {
-            int ig = row_start + i_local;            // global row index
-            row_indices[i_local] = values.size();
-          if (ig > 0) {
-              values.push_back(-1.0);
-              col_indices.push_back((ig - 1) - row_start);
-          }
-          values.push_back(2.0);
-          col_indices.push_back(ig - row_start);
-          if (ig + 1 < nbcol) {
-              values.push_back(-1.0);
-              col_indices.push_back((ig + 1) - row_start);
-          }
+      row_indices.resize(nbrow + 1);
+      for(int i_local = 0; i_local < nbrow; ++i_local) {
+        int ig = row_start + i_local;           // global row
+    
+        row_indices[i_local] = values.size();
+    
+        // sub-diagonal *inside* local block?
+        if (i_local > 0) {
+          values.push_back(-1.0);
+          col_indices.push_back(ig - 1);        // global col index
         }
-        row_indices[nbrow] = values.size();
+    
+        // diagonal
+        values.push_back(2.0);
+        col_indices.push_back(ig);
+    
+        // super-diagonal *inside* local block?
+        if (i_local + 1 < nbrow) {
+          values.push_back(-1.0);
+          col_indices.push_back(ig + 1);
+        }
+      }
+      row_indices[nbrow] = values.size();
     }
     // Matrix–vector multiply (local rows only)
     std::vector<double> operator*(const std::vector<double>& x) const {
@@ -185,6 +192,7 @@ void CG_Solver::solve(const std::vector<double>& b,
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
   int n_local = A.NbRow();                 // rows per rank
+    int row_start = rank * n_local;
 
   // p_global: concatenation of all ranks' p (length = n_local * size)
   // Ap_local: to cache our local y = A * p_global (length = n_local)
@@ -193,9 +201,14 @@ void CG_Solver::solve(const std::vector<double>& b,
 
   // Build the local diagonal block for the block‐Jacobi preconditioner
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int i = 0; i < n_local; ++i) {
-    for (int k = A.row_indices[i]; k < A.row_indices[i+1]; ++k) {
-      coefficients.emplace_back(i, A.col_indices[k], A.values[k]);
+  coefficients.reserve(3 * n_local);
+  for (int i_local = 0; i_local < n_local; ++i_local) {
+    // scan your CSR row i_local
+    for (int idx = A.row_indices[i_local]; idx < A.row_indices[i_local+1]; ++idx) {
+      int global_col = A.col_indices[idx];       // e.g. ig-1, ig, or ig+1
+      int local_col  = global_col - row_start;   // now in [0..n_local-1]
+      double val     = A.values[idx];
+      coefficients.emplace_back(i_local, local_col, val);
     }
   }
   Eigen::SparseMatrix<double> B(n_local, n_local);
