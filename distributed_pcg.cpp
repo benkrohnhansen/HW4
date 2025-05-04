@@ -183,69 +183,71 @@ void CG_Solver::solve(const std::vector<double>& b,
                       double tol) {
   int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &size);    // get total ranks
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  int n_local = A.NbRow();                 // how many rows this rank owns
+  int n_local = A.NbRow();                 // rows per rank
 
-  //   p_global holds the full 'p' from all ranks (length n_local*size)
-  //   Ap_local caches our local mat‐vec result (length n_local)
+  // p_global: concatenation of all ranks' p (length = n_local * size)
+  // Ap_local: to cache our local y = A * p_global (length = n_local)
   std::vector<double> p_global(n_local * size);
   std::vector<double> Ap_local(n_local);
 
+  // Build the local diagonal block for the block‐Jacobi preconditioner
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < n_local; ++row) {
-    for (int idx = A.row_indices[row]; idx < A.row_indices[row+1]; ++idx) {
-      int col = A.col_indices[idx];
-      double val = A.values[idx];
-      coefficients.emplace_back(row, col, val);
+  for (int i = 0; i < n_local; ++i) {
+    for (int k = A.row_indices[i]; k < A.row_indices[i+1]; ++k) {
+      coefficients.emplace_back(i, A.col_indices[k], A.values[k]);
     }
   }
   Eigen::SparseMatrix<double> B(n_local, n_local);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
-  // Compute norms and initialize PCG vectors
-  double norm_b = std::sqrt(global_dot(b, b));
-  const double epsilon = tol * norm_b;
-  std::vector<double> r = b, z = prec(P, b), p = z;
+  // Initial norms and vectors
+  double norm_b    = std::sqrt(global_dot(b, b));
+  const double eps = tol * norm_b;
+  std::vector<double> r = b;
+  std::vector<double> z = prec(P, b);
+  std::vector<double> p = z;
   double rz = global_dot(r, z);
-    int num_it = 0;
-  // Main PCG loop
+
+  int num_it = 0;
+  // Main PCG loop 
   while (true) {
-    // 1) gather the full 'p' into p_global
+    // 1) Gather the full search direction p into p_global
     MPI_Allgather(
-      p.data(),      n_local, MPI_DOUBLE,
-      p_global.data(), n_local, MPI_DOUBLE,
+      p.data(),       n_local, MPI_DOUBLE,
+      p_global.data(),n_local, MPI_DOUBLE,
       MPI_COMM_WORLD
     );
 
-    // 2) local mat‐vec: Ap_local = A * p_global
+    // 2) Local mat–vec using CSR: Ap_local = A * p_global
     Ap_local = A * p_global;
 
-    // 3) compute alpha = (r,z)/(p,Ap)
+    // 3) Compute alpha = (r,z) / (p,Ap)
     double pAp   = global_dot(p, Ap_local);
     double alpha = rz / pAp;
 
-    // 4) update x and r locally
+    // 4) Update x and r (local slices)
     for (int i = 0; i < n_local; ++i) {
       x[i] += alpha * p[i];
       r[i] -= alpha * Ap_local[i];
     }
 
-    // 5) apply preconditioner
+    // 5) Apply preconditioner: z = P^{-1} r
     z = prec(P, r);
 
-    // 6) compute new (r,z), check convergence
+    // 6) Compute new (r,z), print, and check convergence
     double rz_new = global_dot(r, z);
-    num_it++;                                 
-    double res_norm = std::sqrt(global_dot(r, r)); 
+    num_it++;
     if (rank == 0) {
-      std::cout << "iteration: " << num_it 
+      double res_norm = std::sqrt(global_dot(r, r));
+      std::cout << "iteration: " << num_it
                 << "\tresidual:  " << res_norm << "\n";
     }
-    if (res_norm < epsilon) break;
+    if (std::sqrt(rz_new) < eps) break;
 
-    // 7) update p and rz for next iteration
+    // 7) Update search direction p and rz for next iter
     double beta = rz_new / rz;
     for (int i = 0; i < n_local; ++i)
       p[i] = z[i] + beta * p[i];
