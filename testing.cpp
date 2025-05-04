@@ -40,24 +40,30 @@ public:
     CSRMatrix(const int& nrows, const int& ncols, const int& row_start)
       : nbrow(nrows), nbcol(ncols)
     {
-        row_indices.resize(nbrow + 1);
-        for(int i_local = 0; i_local < nbrow; ++i_local) {
-            int ig = row_start + i_local;            // global row index
-            row_indices[i_local] = values.size();
-          if (ig > 0) {
-              values.push_back(-1.0);
-              col_indices.push_back((ig - 1) - row_start);
-          }
-          values.push_back(2.0);
-          col_indices.push_back(ig - row_start);
-          if (ig + 1 < nbcol) {
-              values.push_back(-1.0);
-              col_indices.push_back((ig + 1) - row_start);
-          }
+      row_indices.resize(nbrow + 1);
+      for(int i_local = 0; i_local < nbrow; ++i_local) {
+        int ig = row_start + i_local;           // global row
+    
+        row_indices[i_local] = values.size();
+    
+        // sub-diagonal *inside* local block?
+        if (i_local > 0) {
+          values.push_back(-1.0);
+          col_indices.push_back(ig - 1);        // global col index
         }
-        row_indices[nbrow] = values.size();
+    
+        // diagonal
+        values.push_back(2.0);
+        col_indices.push_back(ig);
+    
+        // super-diagonal *inside* local block?
+        if (i_local + 1 < nbrow) {
+          values.push_back(-1.0);
+          col_indices.push_back(ig + 1);
+        }
+      }
+      row_indices[nbrow] = values.size();
     }
-
     // Matrix–vector multiply (local rows only)
     std::vector<double> operator*(const std::vector<double>& x) const {
         assert(x.size() == (size_t)nbcol);
