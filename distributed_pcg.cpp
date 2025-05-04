@@ -73,6 +73,29 @@ public:
     int NbRow() const { return nbrow; }
     int NbCol() const { return nbcol; }
 };
+
+
+/// Compute the inner product of two local-length vectors across all ranks
+static double global_dot(const std::vector<double>& u,
+                         const std::vector<double>& v) {
+    assert(u.size() == v.size());
+    // 1) local dot-product
+    double local = 0.0;
+    for (size_t i = 0; i < u.size(); ++i) {
+        local += u[i] * v[i];
+    }
+    // 2) all-reduce to get global dot-product
+    double global = 0.0;
+    MPI_Allreduce(
+      &local,      // sendbuf
+      &global,     // recvbuf
+      1,           // count
+      MPI_DOUBLE,  // datatype
+      MPI_SUM,     // op
+      MPI_COMM_WORLD
+    );
+    return global;
+}
   
 // scalar product (u, v)
 double operator,(const std::vector<double>& u, const std::vector<double>& v){ 
@@ -155,67 +178,77 @@ CG_Solver::CG_Solver(const int& n, const int& N) {
  * This is the function being evalauted for performance.
  * Note that the starter code only works for 1 rank and it is not efficient.
  */
-void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
-  int rank;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
+void CG_Solver::solve(const std::vector<double>& b,
+                      std::vector<double>& x,
+                      double tol) {
+  int rank, size;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);    // get total ranks
 
-  int n_local = A.NbRow(); 
+  int n_local = A.NbRow();                 // how many rows this rank owns
 
-  // get the local diagonal block of A
+  //   p_global holds the full 'p' from all ranks (length n_local*size)
+  //   Ap_local caches our local mat‐vec result (length n_local)
+  std::vector<double> p_global(n_local * size);
+  std::vector<double> Ap_local(n_local);
+
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < A.NbRow(); ++row) {
-    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
-        int col = A.col_indices[idx];
-        double val = A.values[idx];
-        coefficients.push_back(Eigen::Triplet<double>(row, col, val));
+  for (int row = 0; row < n_local; ++row) {
+    for (int idx = A.row_indices[row]; idx < A.row_indices[row+1]; ++idx) {
+      int col = A.col_indices[idx];
+      double val = A.values[idx];
+      coefficients.emplace_back(row, col, val);
     }
   }
-
-  // ==========================================
-  // UNCOMMENT TO PRINT CHECK COEFFICIENTS
-  // ==========================================
-
-  // std::cout << "\nTriplets from CSR matrix:\n";
-  // for (const auto& t : coefficients) {
-  //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-  // }
-  
-
-  // compute the Cholesky factorization of the diagonal block for the preconditioner
   Eigen::SparseMatrix<double> B(n_local, n_local);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
-  const double epsilon = tol * std::sqrt((b, b));
-  x.assign(b.size(), 0.);
+  // Compute norms and initialize PCG vectors
+  double norm_b = std::sqrt(global_dot(b, b));
+  const double epsilon = tol * norm_b;
   std::vector<double> r = b, z = prec(P, b), p = z;
-  double alpha = 0., beta = 0.;
-  double res = std::sqrt((r, r));
+  double rz = global_dot(r, z);
+    int num_it = 0;
+  // Main PCG loop
+  while (true) {
+    // 1) gather the full 'p' into p_global
+    MPI_Allgather(
+      p.data(),      n_local, MPI_DOUBLE,
+      p_global.data(), n_local, MPI_DOUBLE,
+      MPI_COMM_WORLD
+    );
 
-  int num_it = 0;
+    // 2) local mat‐vec: Ap_local = A * p_global
+    Ap_local = A * p_global;
 
-  // std::vector<double> Ap = A * p;
-  // std::cout << "A * p = [";
-  // for (size_t i = 0; i < Ap.size(); ++i) {
-  //     std::cout << Ap[i];
-  //     if (i < Ap.size() - 1) std::cout << ", ";
-  // }
-  // std::cout << "]\n";
+    // 3) compute alpha = (r,z)/(p,Ap)
+    double pAp   = global_dot(p, Ap_local);
+    double alpha = rz / pAp;
 
-  
-  while(res >= epsilon) {
-    alpha = (r, z) / (p, A * p);
-    x += (+alpha) * p; 
-    r += (-alpha) * (A * p);
-    z = prec(P, r);
-    beta = (r, z) / (alpha * (p, A * p)); 
-    p = z + beta * p;    
-    res = std::sqrt((r, r));
-    
-    num_it++;
-    if (rank == 0 && !(num_it % 1)) {
-      std::cout << "iteration: " << num_it << "\t";
-      std::cout << "residual:  " << res << "\n";
+    // 4) update x and r locally
+    for (int i = 0; i < n_local; ++i) {
+      x[i] += alpha * p[i];
+      r[i] -= alpha * Ap_local[i];
     }
+
+    // 5) apply preconditioner
+    z = prec(P, r);
+
+    // 6) compute new (r,z), check convergence
+    double rz_new = global_dot(r, z);
+    num_it++;                                 
+    double res_norm = std::sqrt(global_dot(r, r)); 
+    if (rank == 0) {
+      std::cout << "iteration: " << num_it 
+                << "\tresidual:  " << res_norm << "\n";
+    }
+    if (res_norm < epsilon) break;
+
+    // 7) update p and rz for next iteration
+    double beta = rz_new / rz;
+    for (int i = 0; i < n_local; ++i)
+      p[i] = z[i] + beta * p[i];
+    rz = rz_new;
   }
- }
+}
