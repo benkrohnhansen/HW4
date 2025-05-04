@@ -252,3 +252,4 @@ while (true) {
     p[i] = z[i] + beta * p[i];
   rz = rz_new;
 }
+}
