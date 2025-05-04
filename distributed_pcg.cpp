@@ -114,7 +114,7 @@ CSRMatrix A;
 CG_Solver::CG_Solver(const int& n, const int& N) {
   // 1) Discover the MPI rank and the total number of ranks
   int rank, size;
-  MPI_Comm_rank(CMPI_COMM_WORLD, &rank);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
   // 2) Compute how many rows we  own
@@ -127,7 +127,8 @@ CG_Solver::CG_Solver(const int& n, const int& N) {
   std::cout << "Rank" << rank << " owns rows " << row_start << "-" << row_end << "\n";
 
   // 4) Pass those into the CSR  builder so it  only builds that  slice
-  A = CSRMatrix(n_local, N, row_start); 
+  CSRMatrix fullA(N, N);
+  A = fullA.submatrix(row_start, n_local);
 }
 
 /* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
