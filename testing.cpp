@@ -237,12 +237,13 @@ void CG_Solver::solve(const std::vector<double>& b,
 
     // 6) compute new (r,z), check convergence
     double rz_new = global_dot(r, z);
-      if (rank == 0) {
-        double res_norm = std::sqrt(rz_new);
-        std::cout << "iteration: " << num_it
+    num_it++;                                 
+    double res_norm = std::sqrt(global_dot(r, r)); 
+    if (rank == 0) {
+      std::cout << "iteration: " << num_it 
                 << "\tresidual:  " << res_norm << "\n";
-        }
-    if (std::sqrt(rz_new) < epsilon) break;
+    }
+    if (res_norm < epsilon) break;
 
     // 7) update p and rz for next iteration
     double beta = rz_new / rz;
