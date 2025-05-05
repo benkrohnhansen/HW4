@@ -4,182 +4,176 @@
 #include <cmath>
 #include <iostream>
 #include <mpi.h>
-#include <utility>
+#include <vector>
 
 #include <Eigen/Sparse>
 
 class CSRMatrix {
-  public:
-      int nbrow, nbcol;
-      std::vector<double> values;
-      std::vector<int> col_indices;
-      std::vector<int> row_indices;
-  
-      // Constructor: Build a 1D Poisson matrix with Dirichlet BCs
-      CSRMatrix(const int& nrows=0, const int& ncols=0) : nbrow(nrows), nbcol(ncols) {
-          row_indices.resize(nbrow + 1);
-          for (int i = 0; i < nbrow; ++i) {
-              row_indices[i] = values.size();
-  
-              if (i > 0) {
-                  values.push_back(-1.0);
-                  col_indices.push_back(i - 1);
-              }
-  
-              values.push_back(2.0);
-              col_indices.push_back(i);
-  
-              if (i + 1 < nbcol) {
-                  values.push_back(-1.0);
-                  col_indices.push_back(i + 1);
-              }
-          }
-          row_indices[nbrow] = values.size();
+ public:
+  int nbrow, nbcol, start_row;
+  std::vector<double> values;
+  std::vector<int> col_indices;
+  std::vector<int> row_indices;
+
+  CSRMatrix(int nrows = 0, int ncols = 0, int start = 0)
+      : nbrow(nrows), nbcol(ncols), start_row(start) {
+    row_indices.resize(nbrow + 1);
+    for (int i = 0; i < nbrow; ++i) {
+      int global_row = start_row + i;
+      row_indices[i] = values.size();
+
+      if (global_row > 0) {
+        values.push_back(-1.0);
+        col_indices.push_back(global_row - 1);
       }
-  
-      // Matrix-vector multiplication y = A * x
-      std::vector<double> operator*(const std::vector<double>& x) const {
-          assert(x.size() == nbcol);
-          std::vector<double> y(nbrow, 0.0);
-          for (int i = 0; i < nbrow; ++i) {
-              for (int j = row_indices[i]; j < row_indices[i + 1]; ++j) {
-                  y[i] += values[j] * x[col_indices[j]];
-              }
-          }
-          return y;
+
+      values.push_back(2.0);
+      col_indices.push_back(global_row);
+
+      if (global_row + 1 < nbcol) {
+        values.push_back(-1.0);
+        col_indices.push_back(global_row + 1);
       }
-  
-      int NbRow() const { return nbrow; }
-      int NbCol() const { return nbcol; }
+    }
+    row_indices[nbrow] = values.size();
+  }
+
+  std::vector<double> operator*(const std::vector<double>& x_local) const {
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    int n = nbrow;
+    std::vector<double> x_extended(n + 2);  // ghost_left + local + ghost_right
+
+    for (int i = 0; i < n; ++i) x_extended[i + 1] = x_local[i];
+
+    MPI_Request requests[4];
+    int req_count = 0;
+    double left_send = x_local[0], right_send = x_local[n - 1];
+    double left_recv = 0.0, right_recv = 0.0;
+
+    if (rank > 0) {
+      MPI_Isend(&left_send, 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &requests[req_count++]);
+      MPI_Irecv(&left_recv, 1, MPI_DOUBLE, rank - 1, 1, MPI_COMM_WORLD, &requests[req_count++]);
+    }
+    if (rank < size - 1) {
+      MPI_Isend(&right_send, 1, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD, &requests[req_count++]);
+      MPI_Irecv(&right_recv, 1, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, &requests[req_count++]);
+    }
+
+    MPI_Waitall(req_count, requests, MPI_STATUSES_IGNORE);
+
+    if (rank > 0) x_extended[0] = left_recv;
+    if (rank < size - 1) x_extended[n + 1] = right_recv;
+
+    std::vector<double> y(nbrow, 0.0);
+    for (int i = 0; i < nbrow; ++i) {
+      for (int j = row_indices[i]; j < row_indices[i + 1]; ++j) {
+        int global_col = col_indices[j];
+        int idx = global_col - start_row + 1;
+        y[i] += values[j] * x_extended[idx];
+      }
+    }
+    return y;
+  }
+
+  int NbRow() const { return nbrow; }
+  int NbCol() const { return nbcol; }
 };
-  
-// scalar product (u, v)
-double operator,(const std::vector<double>& u, const std::vector<double>& v){ 
+
+// Vector utilities
+
+double dot(const std::vector<double>& u, const std::vector<double>& v) {
   assert(u.size() == v.size());
-  double sp = 0.;
-  for(int j = 0; j < u.size(); j++)
-    sp += u[j] * v[j];
-  return sp; 
+  double local_sum = 0.;
+  for (size_t j = 0; j < u.size(); ++j)
+    local_sum += u[j] * v[j];
+  double global_sum;
+  MPI_Allreduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  return global_sum;
 }
 
-// addition of two vectors u+v
-std::vector<double> operator+(const std::vector<double>& u, const std::vector<double>& v){ 
+std::vector<double> operator+(const std::vector<double>& u, const std::vector<double>& v) {
   assert(u.size() == v.size());
   std::vector<double> w = u;
-  for(int j = 0; j < u.size(); j++)
+  for (size_t j = 0; j < u.size(); ++j)
     w[j] += v[j];
   return w;
 }
 
-// multiplication of a vector by a scalar a*u
-std::vector<double> operator*(const double& a, const std::vector<double>& u){ 
+std::vector<double> operator*(double a, const std::vector<double>& u) {
   std::vector<double> w(u.size());
-  for(int j = 0; j < w.size(); j++) 
+  for (size_t j = 0; j < w.size(); ++j)
     w[j] = a * u[j];
   return w;
 }
 
-// addition assignment operator, add v to u
-void operator+=(std::vector<double>& u, const std::vector<double>& v){ 
+void operator+=(std::vector<double>& u, const std::vector<double>& v) {
   assert(u.size() == v.size());
-  for(int j = 0; j < u.size(); j++)
+  for (size_t j = 0; j < u.size(); ++j)
     u[j] += v[j];
 }
 
-/* block Jacobi preconditioner: perform forward and backward substitution
-   using the Cholesky factorization of the local diagonal block computed by Eigen */
-std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>>& P, const std::vector<double>& u){
+std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>>& P, const std::vector<double>& u) {
   Eigen::VectorXd b(u.size());
-  for (int i = 0; i < u.size(); i++) 
-    b[i] = u[i];
+  for (size_t i = 0; i < u.size(); ++i) b[i] = u[i];
   Eigen::VectorXd xe = P.solve(b);
   std::vector<double> x(u.size());
-  for (int i = 0; i < u.size(); i++) 
-    x[i] = xe[i];
+  for (size_t i = 0; i < u.size(); ++i) x[i] = xe[i];
   return x;
 }
 
-CSRMatrix A;
+static CSRMatrix A;
 
-
-/* N is the size of the matrix, and n is the number of rows assigned per rank.
- * It is your responsibility to generate the input matrix, assuming the ranks are 
- * partitioned rowwise.
- * The input matrix is L + I, where L is the Laplacian of a 1D Possion's equation,
- * and I is the identity matrix.
- * See the constructor of the Matrix structure as an example.
- * The constructor of CG_Solver will not be included in the timing result.
- * Note that the starter code only works for 1 rank and it is not efficient.
- */
 CG_Solver::CG_Solver(const int& n, const int& N) {
-  A = CSRMatrix(n, N); 
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  int start_row = rank * n;
+  A = CSRMatrix(n, N, start_row);
 }
 
-/* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
- * This is the function being evalauted for performance.
- * Note that the starter code only works for 1 rank and it is not efficient.
- */
 void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
   int rank;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  int n = A.NbCol();
-
-  // get the local diagonal block of A
+  int n = A.NbRow();
   std::vector<Eigen::Triplet<double>> coefficients;
   for (int row = 0; row < A.NbRow(); ++row) {
     for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
-        int col = A.col_indices[idx];
-        double val = A.values[idx];
-        coefficients.push_back(Eigen::Triplet<double>(row, col, val));
+      int col = A.col_indices[idx];
+      if (col >= rank * n && col < (rank + 1) * n) {
+        coefficients.emplace_back(row, col - rank * n, A.values[idx]);
+      }
     }
   }
 
-  // ==========================================
-  // UNCOMMENT TO PRINT CHECK COEFFICIENTS
-  // ==========================================
-
-  // std::cout << "\nTriplets from CSR matrix:\n";
-  // for (const auto& t : coefficients) {
-  //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-  // }
-  
-
-  // compute the Cholesky factorization of the diagonal block for the preconditioner
   Eigen::SparseMatrix<double> B(n, n);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
-  const double epsilon = tol * std::sqrt((b, b));
-  x.assign(b.size(), 0.);
+  const double epsilon = tol * std::sqrt(dot(b, b));
+  x.assign(n, 0.);
   std::vector<double> r = b, z = prec(P, b), p = z;
   double alpha = 0., beta = 0.;
-  double res = std::sqrt((r, r));
+  double res = std::sqrt(dot(r, r));
 
   int num_it = 0;
 
-  // std::vector<double> Ap = A * p;
-  // std::cout << "A * p = [";
-  // for (size_t i = 0; i < Ap.size(); ++i) {
-  //     std::cout << Ap[i];
-  //     if (i < Ap.size() - 1) std::cout << ", ";
-  // }
-  // std::cout << "]\n";
-
-  
-  while(res >= epsilon) {
-    alpha = (r, z) / (p, A * p);
-    x += (+alpha) * p; 
-    r += (-alpha) * (A * p);
+  while (res >= epsilon) {
+    std::vector<double> Ap = A * p;
+    alpha = dot(r, z) / dot(p, Ap);
+    x += alpha * p;
+    r += -alpha * Ap;
     z = prec(P, r);
-    beta = (r, z) / (alpha * (p, A * p)); 
-    p = z + beta * p;    
-    res = std::sqrt((r, r));
-    
+    beta = dot(r, z) / (alpha * dot(p, Ap));
+    p = z + beta * p;
+    res = std::sqrt(dot(r, r));
+
     num_it++;
     if (rank == 0 && !(num_it % 1)) {
       std::cout << "iteration: " << num_it << "\t";
       std::cout << "residual:  " << res << "\n";
     }
   }
- }
+}
