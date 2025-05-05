@@ -4,9 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <mpi.h>
-#include <utility>
 #include <numeric>
-#include <iomanip>
 
 #include <Eigen/Sparse>
 
@@ -17,7 +15,9 @@ public:
     std::vector<int> col_indices;
     std::vector<int> row_indices;
 
-    CSRMatrix(const int& nrows=0, const int& ncols=0) : nbrow(nrows), nbcol(ncols) {
+    CSRMatrix(const int& nrows = 0, const int& ncols = 0)
+      : nbrow(nrows), nbcol(ncols)
+    {
         row_indices.resize(nbrow + 1);
         for (int i = 0; i < nbrow; ++i) {
             row_indices[i] = values.size();
@@ -50,42 +50,45 @@ public:
     int NbCol() const { return nbcol; }
 };
 
-double operator,(const std::vector<double>& u, const std::vector<double>& v){ 
+double operator,(const std::vector<double>& u, const std::vector<double>& v) {
     assert(u.size() == v.size());
-    double sp = 0.;
-    for(size_t j = 0; j < u.size(); j++)
+    double sp = 0.0;
+    for (size_t j = 0; j < u.size(); ++j)
         sp += u[j] * v[j];
-    return sp; 
+    return sp;
 }
 
-std::vector<double> operator+(const std::vector<double>& u, const std::vector<double>& v){ 
+std::vector<double> operator+(const std::vector<double>& u, const std::vector<double>& v) {
     assert(u.size() == v.size());
     std::vector<double> w = u;
-    for(size_t j = 0; j < u.size(); j++)
+    for (size_t j = 0; j < u.size(); ++j)
         w[j] += v[j];
     return w;
 }
 
-std::vector<double> operator*(const double& a, const std::vector<double>& u){ 
+std::vector<double> operator*(const double& a, const std::vector<double>& u) {
     std::vector<double> w(u.size());
-    for(size_t j = 0; j < w.size(); j++) 
+    for (size_t j = 0; j < u.size(); ++j)
         w[j] = a * u[j];
     return w;
 }
 
-void operator+=(std::vector<double>& u, const std::vector<double>& v){ 
+void operator+=(std::vector<double>& u, const std::vector<double>& v) {
     assert(u.size() == v.size());
-    for(size_t j = 0; j < u.size(); j++)
+    for (size_t j = 0; j < u.size(); ++j)
         u[j] += v[j];
 }
 
-std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>>& P, const std::vector<double>& u){
+std::vector<double> prec(
+    const Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>>& P,
+    const std::vector<double>& u)
+{
     Eigen::VectorXd b(u.size());
-    for (int i = 0; i < (int)u.size(); i++) 
+    for (size_t i = 0; i < u.size(); ++i)
         b[i] = u[i];
     Eigen::VectorXd xe = P.solve(b);
     std::vector<double> x(u.size());
-    for (int i = 0; i < (int)u.size(); i++) 
+    for (size_t i = 0; i < u.size(); ++i)
         x[i] = xe[i];
     return x;
 }
@@ -96,10 +99,12 @@ CG_Solver::CG_Solver(const int& n, const int& N) {
     A = CSRMatrix(N, N);
 }
 
-void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
-    int rank, size;
+void CG_Solver::solve(const std::vector<double>& b,
+                      std::vector<double>& x,
+                      double tol)
+{
+    int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     int N = A.NbRow();
 
@@ -111,11 +116,6 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
         }
     }
 
-    std::cout << "\nTriplets from CSR matrix:\n";
-    for (const auto& t : coefficients) {
-        std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-    }
-
     Eigen::SparseMatrix<double> B(N, N);
     B.setFromTriplets(coefficients.begin(), coefficients.end());
     Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
@@ -124,61 +124,29 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
     std::vector<double> r = b;
     std::vector<double> z = prec(P, r);
     std::vector<double> p = z;
-
-    double rr_loc = std::inner_product(r.begin(), r.end(), z.begin(), 0.0);
-    double rr;
-    MPI_Allreduce(&rr_loc, &rr, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    double tol_abs = tol * std::sqrt(rr);
-
     std::vector<double> Ap(N);
-    int iter = 1;
-    double t_start = MPI_Wtime();
-    while (std::sqrt(rr) > tol_abs) {
-        Ap = A * p;
-        double pAp_loc = std::inner_product(p.begin(), p.end(), Ap.begin(), 0.0);
-        double pAp;
-        MPI_Allreduce(&pAp_loc, &pAp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
-        double alpha = rr / pAp;
-        for (int i = 0; i < N; ++i) {
-            x[i] += alpha * p[i];
-            r[i] -= alpha * Ap[i];
-        }
+    double epsilon = tol * std::sqrt((r, r));
+    int num_it = 0;
+
+    while (true) {
+        double rr = std::sqrt((r, r));
+        if (rr < epsilon) break;
+
+        Ap = A * p;
+
+        double alpha = (r, z) / (p, Ap);
+        x += alpha * p;
+        r += -alpha * Ap;
 
         z = prec(P, r);
-        double rr_new_loc = std::inner_product(r.begin(), r.end(), z.begin(), 0.0);
-        MPI_Allreduce(&rr_new_loc, &rr, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        double beta = rr / rr_loc;
+        double beta = (r, z) / (alpha * (p, Ap));
+        p = z + beta * p;
 
-        for (int i = 0; i < N; ++i)
-            p[i] = z[i] + beta * p[i];
-
-        rr_loc = rr;
+        ++num_it;
         if (rank == 0) {
-            double res_val = std::sqrt(rr);
-            std::cout << "iteration: " << iter
-                      << "    residual:  "
-                      << std::scientific << std::setprecision(7)
-                      << res_val << "\n";
+            std::cout << "iteration: " << num_it << "\t";
+            std::cout << "residual:  " << std::sqrt((r, r)) << "\n";
         }
-        ++iter;
-    }
-    double t_end = MPI_Wtime();
-    if (rank == 0) {
-        std::cout << "Time for CG of size " << N
-                  << " with " << size << " rank(s): "
-                  << std::fixed << std::setprecision(6)
-                  << (t_end - t_start) << " seconds.\n";
-
-        auto Ax = A * x;
-        std::vector<double> diff(N);
-        for (int i = 0; i < N; ++i)
-            diff[i] = Ax[i] - b[i];
-
-        double num   = std::sqrt(std::inner_product(diff.begin(), diff.end(), diff.begin(), 0.0));
-        double denom = std::sqrt(std::inner_product(b.begin(), b.end(), b.begin(), 0.0));
-        std::cout << "|Ax - b| / |b| = "
-                  << std::scientific << std::setprecision(5)
-                  << (num / denom) << "\n";
     }
 }
