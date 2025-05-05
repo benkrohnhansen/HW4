@@ -99,7 +99,7 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
   return x;
 }
 
-CSRMatrix A;
+static CSRMatrix A;
 
 
 /* N is the size of the matrix, and n is the number of rows assigned per rank.
@@ -112,7 +112,7 @@ CSRMatrix A;
  * Note that the starter code only works for 1 rank and it is not efficient.
  */
 CG_Solver::CG_Solver(const int& n, const int& N) {
-  A = CSRMatrix(n, N); 
+  A = CSRMatrix(N, N); 
 }
 
 /* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
@@ -123,15 +123,14 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
 
-  int n = A.NbCol();
+  int N = A.NbRow();
 
   // get the local diagonal block of A
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < A.NbRow(); ++row) {
-    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
-        int col = A.col_indices[idx];
-        double val = A.values[idx];
-        coefficients.push_back(Eigen::Triplet<double>(row, col, val));
+  for (int i = 0; i < N; ++i) {
+    for (int k = A.row_indices[i]; k < A.row_indices[i + 1]; ++k) {
+        if (A.col_indices[k] == i)
+          coefficients.emplace_back(i, i, A.values[k]);
     }
   }
 
@@ -139,47 +138,51 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   // UNCOMMENT TO PRINT CHECK COEFFICIENTS
   // ==========================================
 
-  // std::cout << "\nTriplets from CSR matrix:\n";
-  // for (const auto& t : coefficients) {
-  //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
-  // }
+   std::cout << "\nTriplets from CSR matrix:\n";
+   for (const auto& t : coefficients) {
+       std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
+   }
   
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
-  Eigen::SparseMatrix<double> B(n, n);
+  Eigen::SparseMatrix<double> B(N, N);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
-  const double epsilon = tol * std::sqrt((b, b));
-  x.assign(b.size(), 0.);
-  std::vector<double> r = b, z = prec(P, b), p = z;
-  double alpha = 0., beta = 0.;
-  double res = std::sqrt((r, r));
+  x.assign(N, 0.0);
+  std::vector<double> r = b;
+  std::vector<double> z = prec(P, r);
+  std::vector<double> p = z;
+  double rr_loc = std::inner_product(r.begin(), r.end(), z.begin(), 0.0);
+  double rr;
+  MPI_Allreduce(&rr_loc, &rr, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  double tol_abs = tol * std::sqrt(rr);
 
-  int num_it = 0;
+  std::vector<double> Ap(N);
+  int iter = 0;
+  while (std::sqrt(rr) > tol_abs) {
+    Ap = A * p;
 
-  // std::vector<double> Ap = A * p;
-  // std::cout << "A * p = [";
-  // for (size_t i = 0; i < Ap.size(); ++i) {
-  //     std::cout << Ap[i];
-  //     if (i < Ap.size() - 1) std::cout << ", ";
-  // }
-  // std::cout << "]\n";
-
-  
-  while(res >= epsilon) {
-    alpha = (r, z) / (p, A * p);
-    x += (+alpha) * p; 
-    r += (-alpha) * (A * p);
-    z = prec(P, r);
-    beta = (r, z) / (alpha * (p, A * p)); 
-    p = z + beta * p;    
-    res = std::sqrt((r, r));
-    
-    num_it++;
-    if (rank == 0 && !(num_it % 1)) {
-      std::cout << "iteration: " << num_it << "\t";
-      std::cout << "residual:  " << res << "\n";
+    double pAp_loc = std::inner_product(p.begin(), p.end(), Ap.begin(), 0.0);
+    double pAp;
+    MPI_Allreduce(&pAp_loc, &pAp, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    double alpha = rr / pAp;
+    for (int i = 0; i < N; ++i) {
+      x[i] += alpha * p[i];
+      r[i] -= alpha * Ap[i];
     }
+
+    z = prec(P, r);
+    double rr_new_loc = std::inner_product(r.begin(), r.end(), z.begin(), 0.0);
+    MPI_Allreduce(&rr_new_loc, &rr, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    double beta = rr / rr_loc;
+
+    for (int i = 0; i < N; ++i)
+      p[i] = z[i] + beta * p[i]; 
+
+    rr_loc = rr;
+    if (rank == 0)
+      std::cout << "iter=" << iter << " res=" << std::sqrt(rr) << std::endl;
+      ++iter;
   }
  }
