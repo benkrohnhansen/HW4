@@ -8,37 +8,49 @@
 
 #include <Eigen/Sparse>
 
-class Matrix{
+class CSRMatrix {
   public:
-    typedef std::pair<int, int> N2;
+      int nbrow, nbcol;
+      std::vector<double> values;
+      std::vector<int> col_indices;
+      std::vector<int> row_indices;
   
-    std::map<N2, double> data;
-    int nbrow;
-    int nbcol;
-
-    Matrix(const int& nr = 0, const int& nc = 0): nbrow(nr), nbcol(nc) {
-      for (int i = 0; i < nc; ++i) {
-        data[std::make_pair(i, i)] = 2.0;
-        if (i - 1 >= 0) data[std::make_pair(i, i - 1)] = -1.0;
-        if (i + 1 < nc) data[std::make_pair(i, i + 1)] = -1.0;
+      // Constructor: Build a 1D Poisson matrix with Dirichlet BCs
+      CSRMatrix(const int& nrows=0, const int& ncols=0) : nbrow(nrows), nbcol(ncols) {
+          row_indices.resize(nbrow + 1);
+          for (int i = 0; i < nbrow; ++i) {
+              row_indices[i] = values.size();
+  
+              if (i > 0) {
+                  values.push_back(-1.0);
+                  col_indices.push_back(i - 1);
+              }
+  
+              values.push_back(2.0);
+              col_indices.push_back(i);
+  
+              if (i + 1 < nbcol) {
+                  values.push_back(-1.0);
+                  col_indices.push_back(i + 1);
+              }
+          }
+          row_indices[nbrow] = values.size();
       }
-    }; 
   
-    int NbRow() const {return nbrow;}
-    int NbCol() const {return nbcol;}
-  
-    // matrix-vector product with vector xi
-    std::vector<double> operator*(const std::vector<double>& xi) const {
-      std::vector<double> b(NbRow(), 0.);
-      for(auto it = data.begin(); it != data.end(); ++it){
-        int j = (it->first).first;
-        int k = (it->first).second; 
-        double Mjk = it->second;
-        b[j] += Mjk * xi[k];
+      // Matrix-vector multiplication y = A * x
+      std::vector<double> operator*(const std::vector<double>& x) const {
+          assert(x.size() == nbcol);
+          std::vector<double> y(nbrow, 0.0);
+          for (int i = 0; i < nbrow; ++i) {
+              for (int j = row_indices[i]; j < row_indices[i + 1]; ++j) {
+                  y[i] += values[j] * x[col_indices[j]];
+              }
+          }
+          return y;
       }
   
-      return b;
-    }
+      int NbRow() const { return nbrow; }
+      int NbCol() const { return nbcol; }
 };
   
 // scalar product (u, v)
@@ -87,19 +99,20 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
   return x;
 }
 
-Matrix A;
+CSRMatrix A;
+
 
 /* N is the size of the matrix, and n is the number of rows assigned per rank.
  * It is your responsibility to generate the input matrix, assuming the ranks are 
  * partitioned rowwise.
- * The input matrix is L, where L represents a discretized 1D Possion's equation.
- * That is to say L has 2s on its diagonal and -1s on it super/sub-diagonals.
+ * The input matrix is L + I, where L is the Laplacian of a 1D Possion's equation,
+ * and I is the identity matrix.
  * See the constructor of the Matrix structure as an example.
  * The constructor of CG_Solver will not be included in the timing result.
  * Note that the starter code only works for 1 rank and it is not efficient.
  */
 CG_Solver::CG_Solver(const int& n, const int& N) {
-  A = Matrix(n, N);
+  A = CSRMatrix(n, N); 
 }
 
 /* The preconditioned conjugate gradient method solving Ax = b with tolerance tol.
@@ -110,15 +123,27 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
 
-  int n = A.NbRow();
+  int n = A.NbCol();
 
   // get the local diagonal block of A
   std::vector<Eigen::Triplet<double>> coefficients;
-  for(auto it = A.data.begin(); it != A.data.end(); ++it){
-    int j = (it->first).first;
-    int k = (it->first).second;
-    coefficients.push_back(Eigen::Triplet<double>(j, k, it -> second)); 
+  for (int row = 0; row < A.NbRow(); ++row) {
+    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
+        int col = A.col_indices[idx];
+        double val = A.values[idx];
+        coefficients.push_back(Eigen::Triplet<double>(row, col, val));
+    }
   }
+
+  // ==========================================
+  // UNCOMMENT TO PRINT CHECK COEFFICIENTS
+  // ==========================================
+
+  // std::cout << "\nTriplets from CSR matrix:\n";
+  // for (const auto& t : coefficients) {
+  //     std::cout << "(" << t.row() << ", " << t.col() << ") = " << t.value() << "\n";
+  // }
+  
 
   // compute the Cholesky factorization of the diagonal block for the preconditioner
   Eigen::SparseMatrix<double> B(n, n);
@@ -132,6 +157,15 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   double res = std::sqrt((r, r));
 
   int num_it = 0;
+
+  // std::vector<double> Ap = A * p;
+  // std::cout << "A * p = [";
+  // for (size_t i = 0; i < Ap.size(); ++i) {
+  //     std::cout << Ap[i];
+  //     if (i < Ap.size() - 1) std::cout << ", ";
+  // }
+  // std::cout << "]\n";
+
   
   while(res >= epsilon) {
     alpha = (r, z) / (p, A * p);
