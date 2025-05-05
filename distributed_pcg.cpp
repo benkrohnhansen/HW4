@@ -5,6 +5,7 @@
 #include <iostream>
 #include <mpi.h>
 #include <numeric>
+#include <iomanip>
 
 #include <Eigen/Sparse>
 
@@ -12,8 +13,8 @@ class CSRMatrix {
 public:
     int nbrow, nbcol;
     std::vector<double> values;
-    std::vector<int> col_indices;
-    std::vector<int> row_indices;
+    std::vector<int>    col_indices;
+    std::vector<int>    row_indices;
 
     CSRMatrix(const int& nrows = 0, const int& ncols = 0)
       : nbrow(nrows), nbcol(ncols)
@@ -50,7 +51,10 @@ public:
     int NbCol() const { return nbcol; }
 };
 
-double operator,(const std::vector<double>& u, const std::vector<double>& v) {
+double operator,(
+    const std::vector<double>& u,
+    const std::vector<double>& v)
+{
     assert(u.size() == v.size());
     double sp = 0.0;
     for (size_t j = 0; j < u.size(); ++j)
@@ -58,7 +62,10 @@ double operator,(const std::vector<double>& u, const std::vector<double>& v) {
     return sp;
 }
 
-std::vector<double> operator+(const std::vector<double>& u, const std::vector<double>& v) {
+std::vector<double> operator+(
+    const std::vector<double>& u,
+    const std::vector<double>& v)
+{
     assert(u.size() == v.size());
     std::vector<double> w = u;
     for (size_t j = 0; j < u.size(); ++j)
@@ -66,14 +73,20 @@ std::vector<double> operator+(const std::vector<double>& u, const std::vector<do
     return w;
 }
 
-std::vector<double> operator*(const double& a, const std::vector<double>& u) {
+std::vector<double> operator*(
+    const double& a,
+    const std::vector<double>& u)
+{
     std::vector<double> w(u.size());
     for (size_t j = 0; j < u.size(); ++j)
         w[j] = a * u[j];
     return w;
 }
 
-void operator+=(std::vector<double>& u, const std::vector<double>& v) {
+void operator+=(
+    std::vector<double>& u,
+    const std::vector<double>& v)
+{
     assert(u.size() == v.size());
     for (size_t j = 0; j < u.size(); ++j)
         u[j] += v[j];
@@ -99,25 +112,26 @@ CG_Solver::CG_Solver(const int& n, const int& N) {
     A = CSRMatrix(N, N);
 }
 
-void CG_Solver::solve(const std::vector<double>& b,
-                      std::vector<double>& x,
-                      double tol)
+void CG_Solver::solve(
+    const std::vector<double>& b,
+    std::vector<double>& x,
+    double tol)
 {
-    int rank;
+    int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     int N = A.NbRow();
 
-    std::vector<Eigen::Triplet<double>> coefficients;
+    std::vector<Eigen::Triplet<double>> coeffs;
     for (int i = 0; i < N; ++i) {
         for (int k = A.row_indices[i]; k < A.row_indices[i + 1]; ++k) {
             if (A.col_indices[k] == i)
-                coefficients.emplace_back(i, i, A.values[k]);
+                coeffs.emplace_back(i, i, A.values[k]);
         }
     }
-
     Eigen::SparseMatrix<double> B(N, N);
-    B.setFromTriplets(coefficients.begin(), coefficients.end());
+    B.setFromTriplets(coeffs.begin(), coeffs.end());
     Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
     x.assign(N, 0.0);
@@ -128,11 +142,9 @@ void CG_Solver::solve(const std::vector<double>& b,
 
     double epsilon = tol * std::sqrt((r, r));
     int num_it = 0;
+    double t_start = MPI_Wtime();
 
     while (true) {
-        double rr = std::sqrt((r, r));
-        if (rr < epsilon) break;
-
         Ap = A * p;
 
         double alpha = (r, z) / (p, Ap);
@@ -144,9 +156,38 @@ void CG_Solver::solve(const std::vector<double>& b,
         p = z + beta * p;
 
         ++num_it;
-        if (rank == 0) {
-            std::cout << "iteration: " << num_it << "\t";
-            std::cout << "residual:  " << std::sqrt((r, r)) << "\n";
+        double rr = std::sqrt((r, r));
+        if (rank == 0 && num_it <= 2) {
+            std::cout
+              << "iteration: " << num_it
+              << "    residual:  "
+              << std::scientific << std::setprecision(7)
+              << rr << "\n";
         }
+        if (rr < epsilon) break;
+    }
+    double t_end = MPI_Wtime();
+    if (rank == 0) {
+        std::cout
+          << "Time for CG of size " << N
+          << " with " << size << " rank(s): "
+          << std::fixed << std::setprecision(6)
+          << (t_end - t_start) << " seconds.\n";
+
+        auto Ax = A * x;
+        std::vector<double> diff(N);
+        for (int i = 0; i < N; ++i)
+            diff[i] = Ax[i] - b[i];
+
+        double num = std::sqrt(
+          std::inner_product(
+            diff.begin(), diff.end(), diff.begin(), 0.0));
+        double den = std::sqrt(
+          std::inner_product(
+            b.begin(), b.end(), b.begin(), 0.0));
+        std::cout
+          << "|Ax - b| / |b| = "
+          << std::scientific << std::setprecision(5)
+          << (num/den) << "\n";
     }
 }
