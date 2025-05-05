@@ -5,6 +5,7 @@
 #include <iostream>
 #include <mpi.h>
 #include <utility>
+#include <numeric>
 
 #include <Eigen/Sparse>
 
