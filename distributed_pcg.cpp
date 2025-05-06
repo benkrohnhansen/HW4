@@ -15,15 +15,8 @@ class CSRMatrix {
   std::vector<int> col_indices;
   std::vector<int> row_indices;
 
-  CSRMatrix(int N, int rank, int size) {
-    int N_per_rank = N / size;
-    int remainder = N % size;
-    nbrow = (rank < remainder) ? (N_per_rank + 1) : N_per_rank;
-    nbcol = N;
-    start_row = (rank < remainder)
-                  ? rank * (N_per_rank + 1)
-                  : remainder * (N_per_rank + 1) + (rank - remainder) * N_per_rank;
-
+  CSRMatrix(int nrows = 0, int ncols = 0, int start = 0)
+      : nbrow(nrows), nbcol(ncols), start_row(start) {
     row_indices.resize(nbrow + 1);
     for (int i = 0; i < nbrow; ++i) {
       int global_row = start_row + i;
@@ -50,38 +43,36 @@ class CSRMatrix {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    double left_send = (nbrow > 0) ? x_local[0] : 0.0;
-    double right_send = (nbrow > 0) ? x_local[nbrow - 1] : 0.0;
-    double left_recv = 0.0, right_recv = 0.0;
+    int n = nbrow;
+    std::vector<double> x_extended(n + 2);  // ghost_left + local + ghost_right
+
+    for (int i = 0; i < n; ++i) x_extended[i + 1] = x_local[i];
 
     MPI_Request requests[4];
     int req_count = 0;
+    double left_send = x_local[0], right_send = x_local[n - 1];
+    double left_recv = 0.0, right_recv = 0.0;
 
-    if (rank > 0 && nbrow > 0) {
+    if (rank > 0) {
       MPI_Isend(&left_send, 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, &requests[req_count++]);
       MPI_Irecv(&left_recv, 1, MPI_DOUBLE, rank - 1, 1, MPI_COMM_WORLD, &requests[req_count++]);
     }
-    if (rank < size - 1 && nbrow > 0) {
+    if (rank < size - 1) {
       MPI_Isend(&right_send, 1, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD, &requests[req_count++]);
       MPI_Irecv(&right_recv, 1, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, &requests[req_count++]);
     }
+
     MPI_Waitall(req_count, requests, MPI_STATUSES_IGNORE);
 
-    std::vector<double> x_ext(nbrow + 2);
-    for (int i = 0; i < nbrow; ++i)
-      x_ext[i + 1] = x_local[i];
-    if (rank > 0)
-      x_ext[0] = left_recv;
-    if (rank < size - 1)
-      x_ext[nbrow + 1] = right_recv;
+    if (rank > 0) x_extended[0] = left_recv;
+    if (rank < size - 1) x_extended[n + 1] = right_recv;
 
     std::vector<double> y(nbrow, 0.0);
     for (int i = 0; i < nbrow; ++i) {
       for (int j = row_indices[i]; j < row_indices[i + 1]; ++j) {
         int global_col = col_indices[j];
-        int local_index = global_col - start_row + 1;
-        if (local_index >= 0 && local_index <= nbrow + 1)
-          y[i] += values[j] * x_ext[local_index];
+        int idx = global_col - start_row + 1;
+        y[i] += values[j] * x_extended[idx];
       }
     }
     return y;
@@ -133,27 +124,34 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
   return x;
 }
 
-static CSRMatrix* A;
+static CSRMatrix A;
 
-CG_Solver::CG_Solver(const int& n, const int& N) {
+CG_Solver::CG_Solver(const int& n_unused, const int& N) {
   int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
-  A = new CSRMatrix(N, rank, size);
+
+  int N_per_rank = N / size;
+  int remainder = N % size;
+  int nbrow = (rank < remainder) ? N_per_rank + 1 : N_per_rank;
+  int start_row = (rank < remainder)
+                    ? rank * (N_per_rank + 1)
+                    : remainder * (N_per_rank + 1) + (rank - remainder) * N_per_rank;
+
+  A = CSRMatrix(nbrow, N, start_row);
 }
 
 void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  int n = A->NbRow();
-  int N = A->NbCol();
+  int n = A.NbRow();
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < A->NbRow(); ++row) {
-    for (int idx = A->row_indices[row]; idx < A->row_indices[row + 1]; ++idx) {
-      int col = A->col_indices[idx];
-      if (col >= A->start_row && col < A->start_row + A->nbrow) {
-        coefficients.emplace_back(row, col - A->start_row, A->values[idx]);
+  for (int row = 0; row < A.NbRow(); ++row) {
+    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
+      int col = A.col_indices[idx];
+      if (col >= A.start_row && col < A.start_row + A.nbrow) {
+        coefficients.emplace_back(row, col - A.start_row, A.values[idx]);
       }
     }
   }
@@ -171,7 +169,7 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int num_it = 0;
 
   while (res >= epsilon) {
-    std::vector<double> Ap = (*A) * p;
+    std::vector<double> Ap = A * p;
     alpha = dot(r, z) / dot(p, Ap);
     x += alpha * p;
     r += -alpha * Ap;
