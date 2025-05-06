@@ -1,9 +1,11 @@
 #include "common.h"
+
 #include <cassert>
 #include <cmath>
 #include <iostream>
 #include <mpi.h>
 #include <vector>
+
 #include <Eigen/Sparse>
 
 class CSRMatrix {
@@ -34,17 +36,6 @@ class CSRMatrix {
       }
     }
     row_indices[nbrow] = values.size();
-
-    // Debug: Print matrix values for rank 6
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    if (rank == 6) {
-        std::cout << "Rank 6 CSR Matrix Values: " << std::endl;
-        for (size_t i = 0; i < values.size(); ++i) {
-            std::cout << "Row " << i << ": Value = " << values[i] 
-                      << ", Column Index = " << col_indices[i] << std::endl;
-        }
-    }
   }
 
   std::vector<double> operator*(const std::vector<double>& x_local) const {
@@ -73,12 +64,6 @@ class CSRMatrix {
 
     MPI_Waitall(req_count, requests, MPI_STATUSES_IGNORE);
 
-    // Debug: Print communication details for rank 6
-    if (rank == 6) {
-        std::cout << "Rank 6 sent left: " << left_send << ", received left: " << left_recv << std::endl;
-        std::cout << "Rank 6 sent right: " << right_send << ", received right: " << right_recv << std::endl;
-    }
-
     if (rank > 0) x_extended[0] = left_recv;
     if (rank < size - 1) x_extended[n + 1] = right_recv;
 
@@ -92,17 +77,79 @@ class CSRMatrix {
     }
     return y;
   }
+
+  int NbRow() const { return nbrow; }
+  int NbCol() const { return nbcol; }
 };
 
-// Vector utilities and preconditioned CG solver omitted for brevity
+// Vector utilities
+
+double dot(const std::vector<double>& u, const std::vector<double>& v) {
+  assert(u.size() == v.size());
+  double local_sum = 0.;
+  for (size_t j = 0; j < u.size(); ++j)
+    local_sum += u[j] * v[j];
+  double global_sum;
+  MPI_Allreduce(&local_sum, &global_sum, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+  return global_sum;
+}
+
+std::vector<double> operator+(const std::vector<double>& u, const std::vector<double>& v) {
+  assert(u.size() == v.size());
+  std::vector<double> w = u;
+  for (size_t j = 0; j < u.size(); ++j)
+    w[j] += v[j];
+  return w;
+}
+
+std::vector<double> operator*(double a, const std::vector<double>& u) {
+  std::vector<double> w(u.size());
+  for (size_t j = 0; j < w.size(); ++j)
+    w[j] = a * u[j];
+  return w;
+}
+
+void operator+=(std::vector<double>& u, const std::vector<double>& v) {
+  assert(u.size() == v.size());
+  for (size_t j = 0; j < u.size(); ++j)
+    u[j] += v[j];
+}
+
+std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>>& P, const std::vector<double>& u) {
+  Eigen::VectorXd b(u.size());
+  for (size_t i = 0; i < u.size(); ++i) b[i] = u[i];
+  Eigen::VectorXd xe = P.solve(b);
+  std::vector<double> x(u.size());
+  for (size_t i = 0; i < u.size(); ++i) x[i] = xe[i];
+  return x;
+}
+
+static CSRMatrix A;
+
+CG_Solver::CG_Solver(const int& n, const int& N) {
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  int start_row = rank * n;
+  A = CSRMatrix(n, N, start_row);
+}
 
 void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   int n = A.NbRow();
-  
+  std::vector<Eigen::Triplet<double>> coefficients;
+  for (int row = 0; row < A.NbRow(); ++row) {
+    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
+      int col = A.col_indices[idx];
+      if (col >= rank * n && col < (rank + 1) * n) {
+        coefficients.emplace_back(row, col - rank * n, A.values[idx]);
+      }
+    }
+  }
+
   Eigen::SparseMatrix<double> B(n, n);
+  B.setFromTriplets(coefficients.begin(), coefficients.end());
   Eigen::SimplicialCholesky<Eigen::SparseMatrix<double>> P(B);
 
   const double epsilon = tol * std::sqrt(dot(b, b));
@@ -122,11 +169,6 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
     beta = dot(r, z) / (alpha * dot(p, Ap));
     p = z + beta * p;
     res = std::sqrt(dot(r, r));
-
-    // Debug: Print residual values for rank 6
-    if (rank == 6) {
-        std::cout << "Rank 6, Iteration " << num_it << " | r * r: " << dot(r, r) << " | res: " << res << std::endl;
-    }
 
     num_it++;
     if (rank == 0 && !(num_it % 1)) {
