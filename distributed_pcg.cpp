@@ -91,6 +91,8 @@ class CSRMatrix {
   int NbCol() const { return nbcol; }
 };
 
+// Vector utilities
+
 double dot(const std::vector<double>& u, const std::vector<double>& v) {
   assert(u.size() == v.size());
   double local_sum = 0.;
@@ -131,27 +133,27 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
   return x;
 }
 
-static CSRMatrix A;
+static CSRMatrix* A;
 
 CG_Solver::CG_Solver(const int& n, const int& N) {
   int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
-  A = CSRMatrix(N, rank, size);
+  A = new CSRMatrix(N, rank, size);
 }
 
 void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  int n = A.NbRow();
-  int N = A.NbCol();
+  int n = A->NbRow();
+  int N = A->NbCol();
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < A.NbRow(); ++row) {
-    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
-      int col = A.col_indices[idx];
-      if (col >= A.start_row && col < A.start_row + A.nbrow) {
-        coefficients.emplace_back(row, col - A.start_row, A.values[idx]);
+  for (int row = 0; row < A->NbRow(); ++row) {
+    for (int idx = A->row_indices[row]; idx < A->row_indices[row + 1]; ++idx) {
+      int col = A->col_indices[idx];
+      if (col >= A->start_row && col < A->start_row + A->nbrow) {
+        coefficients.emplace_back(row, col - A->start_row, A->values[idx]);
       }
     }
   }
@@ -169,7 +171,7 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int num_it = 0;
 
   while (res >= epsilon) {
-    std::vector<double> Ap = A * p;
+    std::vector<double> Ap = (*A) * p;
     alpha = dot(r, z) / dot(p, Ap);
     x += alpha * p;
     r += -alpha * Ap;
