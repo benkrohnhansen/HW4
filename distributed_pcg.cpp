@@ -163,11 +163,12 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   while (res >= epsilon) {
     std::vector<double> Ap = A * p;
     double p_dot_Ap = dot(p, Ap);
-    alpha = dot(r, z) / p_dot_Ap;
+    double r_dot_z = dot(r, z);
+    alpha = r_dot_z / p_dot_Ap;
     x += alpha * p;
     r += -alpha * Ap;
     z = prec(P, r);
-    beta = dot(r, z) / (alpha * p_dot_Ap);
+    beta = dot(r, z) / r_dot_z;
     p = z + beta * p;
     res = std::sqrt(dot(r, r));
 
