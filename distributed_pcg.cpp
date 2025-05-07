@@ -156,14 +156,15 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   x.assign(n, 0.);
   std::vector<double> r = b, z = prec(P, b), p = z;
   double alpha = 0., beta = 0.;
+  double p_dot_Ap = 0., r_dot_z = 0.;
   double res = std::sqrt(dot(r, r));
 
   int num_it = 0;
 
   while (res >= epsilon) {
     std::vector<double> Ap = A * p;
-    double p_dot_Ap = dot(p, Ap);
-    double r_dot_z = dot(r, z);
+    p_dot_Ap = dot(p, Ap);
+    r_dot_z = dot(r, z);
     alpha = r_dot_z / p_dot_Ap;
     x += alpha * p;
     r += -alpha * Ap;
