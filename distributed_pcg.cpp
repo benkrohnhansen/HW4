@@ -156,10 +156,13 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   x.assign(n, 0.);
   std::vector<double> r = b, z = prec(P, b), p = z;
   double alpha = 0., beta = 0.;
-  double p_dot_Ap = 0., r_dot_z = 0.;
   double res = std::sqrt(dot(r, r));
+  
+  double p_dot_Ap = 0., r_dot_z = 0.; // intermediates - Ben
 
   int num_it = 0;
+
+  double t_start = MPI_Wtime();
 
   while (res >= epsilon) {
     std::vector<double> Ap = A * p;
@@ -178,5 +181,17 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
       std::cout << "iteration: " << num_it << "\t";
       std::cout << "residual:  " << res << "\n";
     }
+  }
+
+  // === ⏱️ End timing
+  double t_end = MPI_Wtime();
+  double t_elapsed = t_end - t_start;
+
+  // Report total and per-iteration time
+  if (rank == 0) {
+    std::cout << "\n==== PCG Timing Summary ====\n";
+    std::cout << "Total iterations: " << num_it << "\n";
+    std::cout << "Total time:       " << t_elapsed << " seconds\n";
+    std::cout << "Time per iter:    " << t_elapsed / num_it << " seconds/iter\n";
   }
 }
