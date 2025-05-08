@@ -154,14 +154,20 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
   int start_row = base_rows * rank + std::min(rank, remainder);
   
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < n; ++row) {
-    for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
-      int col = A.col_indices[idx];
-      if (col >= start_row && col < start_row + n) {
-        coefficients.emplace_back(row, col - start_row, A.values[idx]);
+
+  int local_n = A.NbRow(); // safe and clearer name
+  
+  for (int local_row = 0; local_row < local_n; ++local_row) {
+    for (int idx = A.row_indices[local_row]; idx < A.row_indices[local_row + 1]; ++idx) {
+      int global_col = A.col_indices[idx];
+      if (global_col >= start_row && global_col < start_row + local_n) {
+        // local_row stays the same; shift col
+        int local_col = global_col - start_row;
+        coefficients.emplace_back(local_row, local_col, A.values[idx]);
       }
     }
   }
+  
 
   Eigen::SparseMatrix<double> B(n, n);
   B.setFromTriplets(coefficients.begin(), coefficients.end());
