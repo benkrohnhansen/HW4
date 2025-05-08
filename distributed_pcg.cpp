@@ -134,11 +134,11 @@ CG_Solver::CG_Solver(const int& n, const int& N) {
   int base_rows = N / size;
   int remainder = N % size;
   
-  int n = base_rows + (rank < remainder ? 1 : 0);
+  int local_n = base_rows + (rank < remainder ? 1 : 0);
 
   int start_row = base_rows * rank + std::min(rank, remainder);
 
-  A = CSRMatrix(n, N, start_row);
+  A = CSRMatrix(local_n, N, start_row);
 }
 
 void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
