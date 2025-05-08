@@ -166,7 +166,7 @@ void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, doub
 
   while (res >= epsilon) {
     std::vector<double> Ap = A * p;
-    p_dot_Ap = dot(p, Ap);
+    p_dot_Ap = dot(p, Ap); 
     r_dot_z = dot(r, z);
     alpha = r_dot_z / p_dot_Ap;
     x += alpha * p;
