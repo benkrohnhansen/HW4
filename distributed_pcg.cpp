@@ -127,23 +127,38 @@ std::vector<double> prec(const Eigen::SimplicialCholesky<Eigen::SparseMatrix<dou
 static CSRMatrix A;
 
 CG_Solver::CG_Solver(const int& n, const int& N) {
-  int rank;
+  int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  int start_row = rank * n;
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  
+  int base_rows = N / size;
+  int remainder = N % size;
+  
+  int n = base_rows + (rank < remainder ? 1 : 0);
+
+  int start_row = base_rows * rank + std::min(rank, remainder);
+
   A = CSRMatrix(n, N, start_row);
 }
 
 void CG_Solver::solve(const std::vector<double>& b, std::vector<double>& x, double tol) {
-  int rank;
+  int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-  int n = A.NbRow();
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
+  
+  int N = A.NbCol();  // global number of columns
+  int n = A.NbRow();  // local number of rows
+  
+  int base_rows = N / size;
+  int remainder = N % size;
+  int start_row = base_rows * rank + std::min(rank, remainder);
+  
   std::vector<Eigen::Triplet<double>> coefficients;
-  for (int row = 0; row < A.NbRow(); ++row) {
+  for (int row = 0; row < n; ++row) {
     for (int idx = A.row_indices[row]; idx < A.row_indices[row + 1]; ++idx) {
       int col = A.col_indices[idx];
-      if (col >= rank * n && col < (rank + 1) * n) {
-        coefficients.emplace_back(row, col - rank * n, A.values[idx]);
+      if (col >= start_row && col < start_row + n) {
+        coefficients.emplace_back(row, col - start_row, A.values[idx]);
       }
     }
   }
